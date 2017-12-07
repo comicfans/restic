@@ -21,46 +21,6 @@ const blockSize = 512
 var _ = fs.HandleReader(&file{})
 var _ = fs.HandleReleaser(&file{})
 
-type file struct {
-	root  *Root
-	node  *restic.Node
-	inode uint64
-
-	sizes []int
-	blobs [][]byte
-}
-
-func newFile(ctx context.Context, root *Root, inode uint64, node *restic.Node) (fusefile *file, err error) {
-	debug.Log("create new file for %v with %d blobs", node.Name, len(node.Content))
-	var bytes uint64
-	sizes := make([]int, len(node.Content))
-	for i, id := range node.Content {
-		size, ok := root.blobSizeCache.Lookup(id)
-		if !ok {
-			size, err = root.repo.LookupBlobSize(id, restic.DataBlob)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		sizes[i] = int(size)
-		bytes += uint64(size)
-	}
-
-	if bytes != node.Size {
-		debug.Log("sizes do not match: node.Size %v != size %v, using real size", node.Size, bytes)
-		node.Size = bytes
-	}
-
-	return &file{
-		inode: inode,
-		root:  root,
-		node:  node,
-		sizes: sizes,
-		blobs: make([][]byte, len(node.Content)),
-	}, nil
-}
-
 func (f *file) Attr(ctx context.Context, a *fuse.Attr) error {
 	debug.Log("Attr(%v)", f.node.Name)
 	a.Inode = f.inode

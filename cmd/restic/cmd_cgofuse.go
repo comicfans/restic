@@ -1,23 +1,18 @@
-// +build openbsd
 // +build windows
 
 package main
 
 import (
 	"context"
-	"os"
 
 	"github.com/spf13/cobra"
 
+	//	"github.com/billziss-gh/cgofuse/examples/memfs"
+	cgofuse "github.com/billziss-gh/cgofuse/fuse"
 	"github.com/restic/restic/internal/debug"
 	"github.com/restic/restic/internal/errors"
-	"github.com/restic/restic/internal/restic"
-
-	resticfs "github.com/restic/restic/internal/fs"
 	"github.com/restic/restic/internal/fuse"
-
-	systemFuse "bazil.org/fuse"
-	"bazil.org/fuse/fs"
+	"github.com/restic/restic/internal/restic"
 )
 
 var cmdMount = &cobra.Command{
@@ -32,6 +27,8 @@ read-only mount.
 		return runMount(mountOptions, globalOptions, args)
 	},
 }
+
+var host *cgofuse.FileSystemHost
 
 // MountOptions collects all options for the mount command.
 type MountOptions struct {
@@ -78,34 +75,17 @@ func mount(opts MountOptions, gopts GlobalOptions, mountpoint string) error {
 		return err
 	}
 
-	if _, err := resticfs.Stat(mountpoint); os.IsNotExist(errors.Cause(err)) {
-		Verbosef("Mountpoint %s doesn't exist, creating it\n", mountpoint)
-		err = resticfs.Mkdir(mountpoint, os.ModeDir|0700)
-		if err != nil {
-			return err
-		}
-	}
-
-	mountOptions := []systemFuse.MountOption{
-		systemFuse.ReadOnly(),
-		systemFuse.FSName("restic"),
+	mountOptions := []string{
+	//	"ro",
+	//	"fsname=restic",
 	}
 
 	if opts.AllowRoot {
-		mountOptions = append(mountOptions, systemFuse.AllowRoot())
+		mountOptions = append(mountOptions, "allow_root")
 	}
 
 	if opts.AllowOther {
-		mountOptions = append(mountOptions, systemFuse.AllowOther())
-	}
-
-	c, err := systemFuse.Mount(mountpoint, mountOptions...)
-	if err != nil {
-		return err
-	}
-
-	systemFuse.Debug = func(msg interface{}) {
-		debug.Log("fuse: %v", msg)
+		mountOptions = append(mountOptions, "allow_other")
 	}
 
 	cfg := fuse.Config{
@@ -114,26 +94,34 @@ func mount(opts MountOptions, gopts GlobalOptions, mountpoint string) error {
 		Tags:        opts.Tags,
 		Paths:       opts.Paths,
 	}
+
 	root, err := fuse.NewRoot(context.TODO(), repo, cfg)
 	if err != nil {
 		return err
 	}
+	fs := fuse.NewCgofs(context.TODO(), root)
 
 	Printf("Now serving the repository at %s\n", mountpoint)
 	Printf("Don't forget to umount after quitting!\n")
 
 	debug.Log("serving mount at %v", mountpoint)
-	err = fs.Serve(c, root)
-	if err != nil {
-		return err
-	}
 
-	<-c.Ready
-	return c.MountError
+	/*
+		memfs := memfs.NewMemfs()
+		host := cgofuse.NewFileSystemHost(memfs)
+		host.SetCapReaddirPlus(true)
+		host.Mount("z:", nil)
+
+	*/
+	host = cgofuse.NewFileSystemHost(fs)
+	host.Mount("Z:", nil)
+
+	return nil
 }
 
 func umount(mountpoint string) error {
-	return systemFuse.Unmount(mountpoint)
+	//	host.Unmount()
+	return nil
 }
 
 func runMount(opts MountOptions, gopts GlobalOptions, args []string) error {

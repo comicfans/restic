@@ -17,49 +17,6 @@ import (
 	"bazil.org/fuse/fs"
 )
 
-// SnapshotsDir is a fuse directory which contains snapshots named by timestamp.
-type SnapshotsDir struct {
-	inode   uint64
-	root    *Root
-	names   map[string]*restic.Snapshot
-	latest  string
-	tag     string
-	host    string
-	snCount int
-}
-
-// SnapshotsIDSDir is a fuse directory which contains snapshots named by ids.
-type SnapshotsIDSDir struct {
-	inode   uint64
-	root    *Root
-	names   map[string]*restic.Snapshot
-	snCount int
-}
-
-// HostsDir is a fuse directory which contains hosts.
-type HostsDir struct {
-	inode   uint64
-	root    *Root
-	hosts   map[string]bool
-	snCount int
-}
-
-// TagsDir is a fuse directory which contains tags.
-type TagsDir struct {
-	inode   uint64
-	root    *Root
-	tags    map[string]bool
-	snCount int
-}
-
-// SnapshotLink
-type snapshotLink struct {
-	root     *Root
-	inode    uint64
-	target   string
-	snapshot *restic.Snapshot
-}
-
 // ensure that *SnapshotsDir implements these interfaces
 var _ = fs.HandleReadDirAller(&SnapshotsDir{})
 var _ = fs.NodeStringLookuper(&SnapshotsDir{})
@@ -70,94 +27,6 @@ var _ = fs.NodeStringLookuper(&TagsDir{})
 var _ = fs.HandleReadDirAller(&HostsDir{})
 var _ = fs.NodeStringLookuper(&HostsDir{})
 var _ = fs.NodeReadlinker(&snapshotLink{})
-
-// read tag names from the current repository-state.
-func updateTagNames(d *TagsDir) {
-	if d.snCount != d.root.snCount {
-		d.snCount = d.root.snCount
-		d.tags = make(map[string]bool, len(d.root.snapshots))
-		for _, snapshot := range d.root.snapshots {
-			for _, tag := range snapshot.Tags {
-				if tag != "" {
-					d.tags[tag] = true
-				}
-			}
-		}
-	}
-}
-
-// read host names from the current repository-state.
-func updateHostsNames(d *HostsDir) {
-	if d.snCount != d.root.snCount {
-		d.snCount = d.root.snCount
-		d.hosts = make(map[string]bool, len(d.root.snapshots))
-		for _, snapshot := range d.root.snapshots {
-			d.hosts[snapshot.Hostname] = true
-		}
-	}
-}
-
-// read snapshot id names from the current repository-state.
-func updateSnapshotIDSNames(d *SnapshotsIDSDir) {
-	if d.snCount != d.root.snCount {
-		d.snCount = d.root.snCount
-		for _, sn := range d.root.snapshots {
-			name := sn.ID().Str()
-			d.names[name] = sn
-		}
-	}
-}
-
-// NewSnapshotsDir returns a new directory containing snapshots.
-func NewSnapshotsDir(root *Root, inode uint64, tag string, host string) *SnapshotsDir {
-	debug.Log("create snapshots dir, inode %d", inode)
-	d := &SnapshotsDir{
-		root:   root,
-		inode:  inode,
-		names:  make(map[string]*restic.Snapshot),
-		latest: "",
-		tag:    tag,
-		host:   host,
-	}
-
-	return d
-}
-
-// NewSnapshotsIDSDir returns a new directory containing snapshots named by ids.
-func NewSnapshotsIDSDir(root *Root, inode uint64) *SnapshotsIDSDir {
-	debug.Log("create snapshots ids dir, inode %d", inode)
-	d := &SnapshotsIDSDir{
-		root:  root,
-		inode: inode,
-		names: make(map[string]*restic.Snapshot),
-	}
-
-	return d
-}
-
-// NewHostsDir returns a new directory containing host names
-func NewHostsDir(root *Root, inode uint64) *HostsDir {
-	debug.Log("create hosts dir, inode %d", inode)
-	d := &HostsDir{
-		root:  root,
-		inode: inode,
-		hosts: make(map[string]bool),
-	}
-
-	return d
-}
-
-// NewTagsDir returns a new directory containing tag names
-func NewTagsDir(root *Root, inode uint64) *TagsDir {
-	debug.Log("create tags dir, inode %d", inode)
-	d := &TagsDir{
-		root:  root,
-		inode: inode,
-		tags:  make(map[string]bool),
-	}
-
-	return d
-}
 
 // Attr returns the attributes for the root node.
 func (d *SnapshotsDir) Attr(ctx context.Context, attr *fuse.Attr) error {
@@ -209,56 +78,6 @@ func (d *TagsDir) Attr(ctx context.Context, attr *fuse.Attr) error {
 	}
 	debug.Log("attr: %v", attr)
 	return nil
-}
-
-// search element in string list.
-func isElem(e string, list []string) bool {
-	for _, x := range list {
-		if e == x {
-			return true
-		}
-	}
-	return false
-}
-
-// update snapshots if repository has changed
-func updateSnapshots(ctx context.Context, root *Root) {
-	snapshots := restic.FindFilteredSnapshots(ctx, root.repo, root.cfg.Host, root.cfg.Tags, root.cfg.Paths)
-	if root.snCount != len(snapshots) {
-		root.snCount = len(snapshots)
-		root.repo.LoadIndex(ctx)
-		root.snapshots = snapshots
-	}
-}
-
-// read snapshot timestamps from the current repository-state.
-func updateSnapshotNames(d *SnapshotsDir) {
-	if d.snCount != d.root.snCount {
-		d.snCount = d.root.snCount
-		var latestTime time.Time
-		d.latest = ""
-		d.names = make(map[string]*restic.Snapshot, len(d.root.snapshots))
-		for _, sn := range d.root.snapshots {
-			if d.tag == "" || isElem(d.tag, sn.Tags) {
-				if d.host == "" || d.host == sn.Hostname {
-					name := sn.Time.Format(time.RFC3339)
-					if d.latest == "" || !sn.Time.Before(latestTime) {
-						latestTime = sn.Time
-						d.latest = name
-					}
-					for i := 1; ; i++ {
-						if _, ok := d.names[name]; !ok {
-							break
-						}
-
-						name = fmt.Sprintf("%s-%d", sn.Time.Format(time.RFC3339), i)
-					}
-
-					d.names[name] = sn
-				}
-			}
-		}
-	}
 }
 
 // ReadDirAll returns all entries of the SnapshotsDir.
